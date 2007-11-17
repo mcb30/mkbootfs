@@ -1,0 +1,6 @@
+#!/bin/sh
+
+PACKDIR=$1
+[ -n "$PACKDIR" ] || PACKDIR=.
+
+( cd $PACKDIR && find * | cpio -o -H newc )
