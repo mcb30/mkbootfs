@@ -1,0 +1,3 @@
+[submodule "busybox"]
+	path = busybox
+	url = git://git.etherboot.org/scm/people/mcb30/busybox.git
