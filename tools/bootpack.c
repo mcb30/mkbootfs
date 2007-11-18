@@ -7,6 +7,7 @@
 #include <string.h>
 #include <dirent.h>
 #include <errno.h>
+#include <getopt.h>
 #include <assert.h>
 #include <zlib.h>
 
@@ -72,6 +73,12 @@ struct archive {
 	/** Byte count */
 	off_t count;
 };
+
+/** Global verbosity level */
+int verbosity = 0;
+
+/** Output file name */
+char *output_file = NULL;
 
 /**
  * Set value of a CPIO header field
@@ -220,7 +227,8 @@ static int store_tree ( struct archive *archive,
 	real_path_len = strlen ( real_path );
 	stored_path_len = strlen ( stored_path );
 
-	eprintf ( "%s => %s\n", real_path, stored_path );
+	if ( verbosity > 0 )
+		eprintf ( "%s => %s\n", real_path, stored_path );
 
 	/* Stat file */
 	if ( lstat ( real_path, &st ) < 0 ) {
@@ -369,19 +377,85 @@ static int store_mapped_path ( struct archive *archive,
 	return store_tree ( archive, real_path, stored_path );
 }
 
+/**
+ * Parse command-line options
+ *
+ * @v argc		Argument count
+ * @v argv		Arguments
+ * @ret optind		First non-option argument, or -1 on error
+ */
+int parseopts ( const int argc, char **argv ) {
+	static const struct option long_options[] = {
+		{ "verbose", 0, NULL, 'v' },
+		{ "quiet", 0, NULL, 'q' },
+		{ "help", 0, NULL, 'h' },
+		{ "output", required_argument, NULL, 'o' },
+		{ 0, 0, 0, 0 }
+	};
+	static const char usage[] = 
+		"Usage: %s [-v|-q] [-o output.bp] dir[=dir] ...\n";
+	int c;
+
+	while ( 1 ) {
+		int option_index = 0;
+
+		c = getopt_long ( argc, argv, "qvho:",
+				  long_options, &option_index );
+		if ( c == -1 )
+			break;
+
+		switch ( c ) {
+		case 'v':
+			verbosity++;
+			break;
+		case 'q':
+			verbosity--;
+			break;
+		case 'h':
+			eprintf ( usage, argv[0] );
+			return -1;
+		case 'o':
+			output_file = optarg;
+			break;
+		case '?':
+			return -1;
+		default:
+			eprintf ( "Warning: unrecognised option %c\n", c );
+			return -1;
+		}
+	}
+
+	return optind;
+}
+
 int main ( int argc, char **argv ) {
 	struct archive archive;
 	static const char padding[] = { 0, 0, 0 };
 	int arg;
 	unsigned int pad_len;
 
+	/* Parse command-line options */
+	arg = parseopts ( argc, argv );
+	if ( arg < 0 )
+		exit ( 1 );
+
 	/* Initialise archive */
 	memset ( &archive, 0, sizeof ( archive ) );
-	archive.name = "stdout";
-	archive.file = stdout;
+	if ( output_file ) {
+		archive.name = output_file;
+		archive.file = fopen ( output_file, "w" );
+		if ( ! archive.file ) {
+			eprintf ( "Could not open %s for writing: %s\n",
+				  output_file, strerror ( errno ) );
+			exit ( 1 );
+		}
+	} else {
+		archive.name = "stdout";
+		archive.file = stdout;
+	}
 
 	/* Store directory trees */
-	for ( arg = 1 ; arg < argc ; arg++ ) {
+	for ( ; arg < argc ; arg++ ) {
 		if ( store_mapped_path ( &archive, argv[arg] ) < 0 )
 			exit ( 1 );
 	}
