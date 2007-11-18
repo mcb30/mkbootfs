@@ -65,8 +65,12 @@ struct cpio_header {
  * chance to append our padding bytes.
  */
 struct archive {
+	/** File name (used for error messages) */
 	const char *name;
+	/** Stream */
 	FILE *file;
+	/** Byte count */
+	off_t count;
 };
 
 /**
@@ -83,14 +87,14 @@ static void set_cpio_field ( char *field, unsigned long value ) {
 }
 
 /**
- * Store data within archive file
+ * Store raw data within archive file
  *
  * @v archive		Archive file
  * @v buf		Data to write
  * @v len		Length of data to write
  * @ret success		0 on success, -1 on error
  */
-static int store ( struct archive *archive, const void *buf, size_t len ) {
+static int store_raw ( struct archive *archive, const void *buf, size_t len ) {
 	size_t written;
 
 	written = fwrite ( buf, 1, len, archive->file );
@@ -99,8 +103,21 @@ static int store ( struct archive *archive, const void *buf, size_t len ) {
 			  archive->name, strerror ( errno ) );
 		return -1;
 	}
+	archive->count += len;
 
 	return 0;
+}
+
+/**
+ * Store data within archive file
+ *
+ * @v archive		Archive file
+ * @v buf		Data to write
+ * @v len		Length of data to write
+ * @ret success		0 on success, -1 on error
+ */
+static int store ( struct archive *archive, const void *buf, size_t len ) {
+	return store_raw ( archive, buf, len );
 }
 
 /**
@@ -192,10 +209,16 @@ static int store_tree ( struct archive *archive,
 	struct stat st;
 	struct cpio_header cpio;
 	static const char padding[] = { 0, 0, 0 };
-	size_t real_path_len = strlen ( real_path );
-	size_t stored_path_len = strlen ( stored_path );
+	size_t real_path_len;
+	size_t stored_path_len;
 	off_t filesize;
 	unsigned int pad_len;
+
+	/* Tidy up stored path */
+	while ( *stored_path == '/' )
+		stored_path++;
+	real_path_len = strlen ( real_path );
+	stored_path_len = strlen ( stored_path );
 
 	eprintf ( "%s => %s\n", real_path, stored_path );
 
@@ -206,47 +229,53 @@ static int store_tree ( struct archive *archive,
 		return -1;
 	}
 
-	/* Construct and store cpio header */
-	memcpy ( cpio.c_magic, CPIO_MAGIC, sizeof ( cpio.c_magic ) );
-	filesize = st.st_size;
-	if ( ! ( S_ISREG ( st.st_mode ) || S_ISLNK ( st.st_mode ) ) )
-		filesize = 0;
-	set_cpio_field ( cpio.c_ino, st.st_ino );
-	set_cpio_field ( cpio.c_mode, st.st_mode );
-	set_cpio_field ( cpio.c_uid, 0 /* always squash UID */ );
-	set_cpio_field ( cpio.c_gid, 0 /* always squash GID */ );
-	set_cpio_field ( cpio.c_nlink, st.st_nlink );
-	set_cpio_field ( cpio.c_mtime, st.st_mtime );
-	set_cpio_field ( cpio.c_filesize, filesize );
-	set_cpio_field ( cpio.c_maj, major ( st.st_dev ) );
-	set_cpio_field ( cpio.c_min, minor ( st.st_dev ) );
-	set_cpio_field ( cpio.c_rmaj, major ( st.st_rdev ) );
-	set_cpio_field ( cpio.c_rmin, minor ( st.st_rdev ) );
-	set_cpio_field ( cpio.c_namesize, ( stored_path_len + 1 ) );
-	set_cpio_field ( cpio.c_chksum, 0 );
-	if ( store ( archive, &cpio, sizeof ( cpio ) ) < 0 )
-		return -1;
+	/* If this is *not* the root node, create a CPIO entry */
+	if ( stored_path_len ) {
 
-	/* Store path name */
-	if ( store ( archive, stored_path, ( stored_path_len + 1 ) ) < 0 )
-		return -1;
-	pad_len = ( ( -( sizeof ( cpio ) + stored_path_len + 1 ) ) & 0x03 );
-	if ( store ( archive, padding, pad_len ) < 0 )
-		return -1;
+		/* Construct and store cpio header */
+		memcpy ( cpio.c_magic, CPIO_MAGIC, sizeof ( cpio.c_magic ) );
+		filesize = st.st_size;
+		if ( ! ( S_ISREG ( st.st_mode ) || S_ISLNK ( st.st_mode ) ) )
+			filesize = 0;
+		set_cpio_field ( cpio.c_ino, st.st_ino );
+		set_cpio_field ( cpio.c_mode, st.st_mode );
+		set_cpio_field ( cpio.c_uid, 0 /* always squash UID */ );
+		set_cpio_field ( cpio.c_gid, 0 /* always squash GID */ );
+		set_cpio_field ( cpio.c_nlink, st.st_nlink );
+		set_cpio_field ( cpio.c_mtime, st.st_mtime );
+		set_cpio_field ( cpio.c_filesize, filesize );
+		set_cpio_field ( cpio.c_maj, major ( st.st_dev ) );
+		set_cpio_field ( cpio.c_min, minor ( st.st_dev ) );
+		set_cpio_field ( cpio.c_rmaj, major ( st.st_rdev ) );
+		set_cpio_field ( cpio.c_rmin, minor ( st.st_rdev ) );
+		set_cpio_field ( cpio.c_namesize, ( stored_path_len + 1 ) );
+		set_cpio_field ( cpio.c_chksum, 0 );
+		if ( store ( archive, &cpio, sizeof ( cpio ) ) < 0 )
+			return -1;
 
-	/* Read and store object data */
-	if ( S_ISREG ( st.st_mode ) ) {
-		if ( store_file ( archive, real_path, filesize ) < 0 )
+		/* Store path name */
+		if ( store ( archive, stored_path,
+			     ( stored_path_len + 1 ) ) < 0 )
 			return -1;
-	} else if ( S_ISLNK ( st.st_mode ) ) {
-		if ( store_symlink ( archive, real_path, filesize ) < 0 )
+		pad_len = ( -( sizeof ( cpio ) + stored_path_len + 1 ) & 3 );
+		if ( store ( archive, padding, pad_len ) < 0 )
 			return -1;
-	} else {
-		assert ( filesize == 0 );
+
+		/* Read and store object data */
+		if ( S_ISREG ( st.st_mode ) ) {
+			if ( store_file ( archive, real_path, filesize ) < 0 )
+				return -1;
+		} else if ( S_ISLNK ( st.st_mode ) ) {
+			if ( store_symlink ( archive, real_path,
+					     filesize ) < 0 )
+				return -1;
+		} else {
+			assert ( filesize == 0 );
+		}
+		pad_len = ( ( -filesize ) & 3 );
+		if ( store ( archive, padding, pad_len ) < 0 )
+			return -1;
 	}
-	pad_len = ( ( -filesize ) & 0x03 );
-	if ( store ( archive, padding, pad_len ) < 0 )
-		return -1;
 
 	/* If this is a directory, recurse into it */
 	if ( S_ISDIR ( st.st_mode ) ) {
@@ -310,26 +339,67 @@ static int store_trailer ( struct archive *archive ) {
 		return -1;
 	if ( store ( archive, trailer_name, sizeof ( trailer_name ) ) < 0 )
 		return -1;
-	pad_len = ( -( sizeof ( cpio ) + sizeof ( trailer_name ) ) & 0x03 );
+	pad_len = ( -( sizeof ( cpio ) + sizeof ( trailer_name ) ) & 3 );
 	if ( store ( archive, padding, pad_len ) < 0 )
 		return -1;
 	return 0;
 }
 
+/**
+ * Store optionally-mapped directory tree within archive file
+ *
+ * @v archive		Archive file
+ * @v mapped_path	Path specification
+ * @ret success		0 on success, -1 on error
+ */
+static int store_mapped_path ( struct archive *archive,
+			       char *mapped_path ) {
+	char *real_path = mapped_path;
+	char *stored_path;
+	char *separator;
+
+	separator = strchr ( mapped_path, '=' );
+	if ( separator ) {
+		*separator = '\0';
+		stored_path = ( separator + 1 );
+	} else {
+		stored_path = real_path;
+	}
+
+	return store_tree ( archive, real_path, stored_path );
+}
+
 int main ( int argc, char **argv ) {
 	struct archive archive;
+	static const char padding[] = { 0, 0, 0 };
 	int arg;
+	unsigned int pad_len;
 
+	/* Initialise archive */
+	memset ( &archive, 0, sizeof ( archive ) );
 	archive.name = "stdout";
 	archive.file = stdout;
 
+	/* Store directory trees */
 	for ( arg = 1 ; arg < argc ; arg++ ) {
-		if ( store_tree ( &archive, argv[arg], argv[arg] ) < 0 )
-			return -1;
+		if ( store_mapped_path ( &archive, argv[arg] ) < 0 )
+			exit ( 1 );
 	}
 
+	/* Store CPIO trailer */
 	if ( store_trailer ( &archive ) < 0 )
+		exit ( 1 );
+
+	/* Pad file to a multiple of 4 bytes */
+	pad_len = ( -( archive.count ) & 3 );
+	if ( store_raw ( &archive, padding, pad_len ) < 0 )
 		return -1;
+
+	/* Close archive */
+	if ( fclose ( archive.file ) != 0 ) {
+		eprintf ( "Could not close %s: %s\n", archive.name,
+			  strerror ( errno ) );
+	}
 
 	return 0;
 }
