@@ -32,6 +32,10 @@ SKEL_DEVS += /dev/mem
 SKEL_DEVS += /dev/urandom
 
 skeleton.bp : $(BOOTPACK)
+	rm -rf skeleton
+	mkdir -p skeleton/{bin,dev,etc,lib,mnt,proc,sbin,sys}
+	mkdir -p skeleton/{usr/{bin,sbin,share}}
+	mkdir -p skeleton/{var/{lock,log,run}}
 	$(BOOTPACK) -o $@ skeleton=/ $(SKEL_DEVS)
 
 BOOTPACKS += skeleton.bp
