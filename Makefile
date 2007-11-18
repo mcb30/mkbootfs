@@ -12,7 +12,7 @@ $(BOOTPACK) : $(BOOTPACK).c
 	$(CC) $(CFLAGS) $(EXTRA_CFLAGS) -lz $< -o $@
 
 clean ::
-	rm $(BOOTPACK)
+	rm -f $(BOOTPACK)
 
 tools :: $(BOOTPACK)
 
@@ -42,10 +42,8 @@ BOOTPACKS += skeleton.bp
 
 # Busybox boot pack
 
-busybox/include/autoconf.h : busybox/.config
+busybox/busybox : busybox/.config
 	$(MAKE) -C busybox oldconfig
-
-busybox/busybox : busybox/include/autoconf.h
 	uclibc $(MAKE) -C busybox
 
 busybox.bp : busybox/busybox $(BOOTPACK)
