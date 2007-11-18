@@ -3,6 +3,7 @@
 #include <sys/sysmacros.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <unistd.h>
 #include <string.h>
 #include <dirent.h>
@@ -13,7 +14,10 @@
 
 #define eprintf(...) fprintf ( stderr, __VA_ARGS__ )
 
-#define BUFSIZE 4096
+#define BUFSIZE 65536
+
+/* This is an internal zlib constant not exposed via zlib.h */
+#define DEF_MEM_LEVEL 8
 
 /**
  * A CPIO archive header
@@ -56,6 +60,17 @@ struct cpio_header {
 
 #define CPIO_TRAILER_NAME "TRAILER!!!"
 
+/** A gzip header */
+static const unsigned char gzheader[] = {
+	0x1f, 0x8b, Z_DEFLATED, 0, 0, 0, 0, 0, 0, 0x03
+};
+
+/** A gzip footer */
+struct gzfooter {
+	uint32_t crc;
+	uint32_t length;
+};
+
 /**
  * An archive file
  *
@@ -70,8 +85,16 @@ struct archive {
 	const char *name;
 	/** Stream */
 	FILE *file;
-	/** Byte count */
+	/** Raw byte count */
 	off_t count;
+	/** Compressed portion byte count */
+	off_t zcount;
+	/** Compression stream */
+	z_stream zstrm;
+	/** Compression output buffer */
+	unsigned char zout[BUFSIZE];
+	/** Gzip CRC */
+	uint32_t crc;
 };
 
 /** Global verbosity level */
@@ -101,7 +124,8 @@ static void set_cpio_field ( char *field, unsigned long value ) {
  * @v len		Length of data to write
  * @ret success		0 on success, -1 on error
  */
-static int store_raw ( struct archive *archive, const void *buf, size_t len ) {
+static int arc_write_raw ( struct archive *archive, const void *buf,
+			   size_t len ) {
 	size_t written;
 
 	written = fwrite ( buf, 1, len, archive->file );
@@ -123,8 +147,136 @@ static int store_raw ( struct archive *archive, const void *buf, size_t len ) {
  * @v len		Length of data to write
  * @ret success		0 on success, -1 on error
  */
-static int store ( struct archive *archive, const void *buf, size_t len ) {
-	return store_raw ( archive, buf, len );
+static int arc_write ( struct archive *archive, const void *buf, size_t len ) {
+	size_t out_len;
+
+	archive->zstrm.next_in = ( void * ) buf;
+	archive->zstrm.avail_in = len;
+
+	while ( archive->zstrm.avail_in != 0 ) {
+		if ( deflate ( &archive->zstrm, Z_NO_FLUSH ) != Z_OK ) {
+			eprintf ( "Error compressing\n" );
+			return -1;
+		}
+		out_len = ( sizeof ( archive->zout ) -
+			    archive->zstrm.avail_out );
+		if ( out_len ) {
+			if ( arc_write_raw ( archive, archive->zout,
+					     out_len ) < 0 )
+				return -1;
+			archive->zstrm.next_out = archive->zout;
+			archive->zstrm.avail_out = sizeof ( archive->zout );
+		}
+	}
+	archive->crc = crc32 ( archive->crc, buf, len );
+	archive->zcount += len;
+
+	return 0;
+}
+
+/**
+ * Open archive file
+ *
+ * @v archive		Archive file
+ * @v filename		Filename (or NULL for stdout)
+ * @ret success		0 on success, -1 on error
+ */
+static int arc_open ( struct archive *archive, const char *filename ) {
+
+	memset ( archive, 0, sizeof ( *archive ) );
+
+	/* Open underlying file */
+	if ( filename ) {
+		archive->name = filename;
+		archive->file = fopen ( filename, "w" );
+		if ( ! archive->file ) {
+			eprintf ( "Could not open %s for writing: %s\n",
+				  filename, strerror ( errno ) );
+			exit ( 1 );
+		}
+	} else {
+		archive->name = "stdout";
+		archive->file = stdout;
+	}
+
+	/* Initialise compression stream */
+	archive->zstrm.zalloc = Z_NULL;
+	archive->zstrm.zfree = Z_NULL;
+	archive->zstrm.opaque = Z_NULL;
+	archive->zstrm.next_in = Z_NULL;
+	if ( deflateInit2 ( &archive->zstrm, Z_BEST_COMPRESSION, Z_DEFLATED,
+			    -MAX_WBITS, DEF_MEM_LEVEL,
+			    Z_DEFAULT_STRATEGY ) != Z_OK ) {
+		fclose ( archive->file );
+		return -1;
+	}
+	archive->zstrm.next_out = archive->zout;
+	archive->zstrm.avail_out = sizeof ( archive->zout );
+	archive->crc = crc32 ( 0, Z_NULL, 0 );
+
+	/* Write gzip header */
+	if ( arc_write_raw ( archive, gzheader, sizeof ( gzheader ) ) < 0 ) {
+		deflateEnd ( &archive->zstrm );
+		fclose ( archive->file );
+		return -1;
+	}
+
+	return 0;
+}
+
+/**
+ * Close archive file
+ *
+ * @v archive		Archive file
+ * @ret success		0 on success, -1 on error
+ */
+static int arc_close ( struct archive *archive ) {
+	static const char padding[] = { 0, 0, 0 };
+	struct gzfooter gzfooter;
+	unsigned int pad_len;
+	size_t out_len;
+	int zerr;
+	int done;
+
+	/* Flush compression stream */
+	do {
+		zerr = deflate ( &archive->zstrm, Z_FINISH );
+		if ( ( zerr != Z_OK ) && ( zerr != Z_STREAM_END ) ) {
+			eprintf ( "Error compressing\n" );
+			return -1;
+		}
+		done = ( ( zerr == Z_STREAM_END ) &&
+			 ( archive->zstrm.avail_out != 0 ) );
+		out_len = ( sizeof ( archive->zout ) -
+			    archive->zstrm.avail_out );
+		if ( out_len ) {
+			if ( arc_write_raw ( archive, archive->zout,
+					     out_len ) < 0 )
+				return -1;
+			archive->zstrm.next_out = archive->zout;
+			archive->zstrm.avail_out = sizeof ( archive->zout );
+		}
+	} while ( ! done );
+
+	/* Write gzip footer */
+	gzfooter.crc = archive->crc;
+	gzfooter.length = archive->zcount;
+	if ( arc_write_raw ( archive, &gzfooter, sizeof ( gzfooter ) ) < 0 )
+		return -1;
+
+	/* Pad underlying file to a multiple of 4 bytes */
+	pad_len = ( -( archive->count ) & 3 );
+	if ( arc_write_raw ( archive, padding, pad_len ) < 0 )
+		return -1;
+
+	/* Close archive */
+	if ( fclose ( archive->file ) != 0 ) {
+		eprintf ( "Could not close %s: %s\n", archive->name,
+			  strerror ( errno ) );
+		return -1;
+	}
+
+	return 0;
 }
 
 /**
@@ -162,7 +314,7 @@ static int store_file ( struct archive *archive,
 			fclose ( file );
 			return -1;
 		}
-		if ( store ( archive, buf, len ) < 0 ) {
+		if ( arc_write ( archive, buf, len ) < 0 ) {
 			fclose ( file );
 			return -1;
 		}
@@ -197,7 +349,7 @@ static int store_symlink ( struct archive *archive,
 			  real_path, real_path );
 		return -1;
 	}
-	if ( store ( archive, buf, size ) < 0 )
+	if ( arc_write ( archive, buf, size ) < 0 )
 		return -1;
 
 	return 0;
@@ -258,15 +410,15 @@ static int store_tree ( struct archive *archive,
 		set_cpio_field ( cpio.c_rmin, minor ( st.st_rdev ) );
 		set_cpio_field ( cpio.c_namesize, ( stored_path_len + 1 ) );
 		set_cpio_field ( cpio.c_chksum, 0 );
-		if ( store ( archive, &cpio, sizeof ( cpio ) ) < 0 )
+		if ( arc_write ( archive, &cpio, sizeof ( cpio ) ) < 0 )
 			return -1;
 
 		/* Store path name */
-		if ( store ( archive, stored_path,
+		if ( arc_write ( archive, stored_path,
 			     ( stored_path_len + 1 ) ) < 0 )
 			return -1;
 		pad_len = ( -( sizeof ( cpio ) + stored_path_len + 1 ) & 3 );
-		if ( store ( archive, padding, pad_len ) < 0 )
+		if ( arc_write ( archive, padding, pad_len ) < 0 )
 			return -1;
 
 		/* Read and store object data */
@@ -281,7 +433,7 @@ static int store_tree ( struct archive *archive,
 			assert ( filesize == 0 );
 		}
 		pad_len = ( ( -filesize ) & 3 );
-		if ( store ( archive, padding, pad_len ) < 0 )
+		if ( arc_write ( archive, padding, pad_len ) < 0 )
 			return -1;
 	}
 
@@ -343,12 +495,12 @@ static int store_trailer ( struct archive *archive ) {
 	memset ( &cpio, '0', sizeof ( cpio ) );
 	memcpy ( cpio.c_magic, CPIO_MAGIC, sizeof ( cpio.c_magic ) );
 	set_cpio_field ( cpio.c_namesize, sizeof ( trailer_name ) );
-	if ( store ( archive, &cpio, sizeof ( cpio ) ) < 0 )
+	if ( arc_write ( archive, &cpio, sizeof ( cpio ) ) < 0 )
 		return -1;
-	if ( store ( archive, trailer_name, sizeof ( trailer_name ) ) < 0 )
+	if ( arc_write ( archive, trailer_name, sizeof ( trailer_name ) ) < 0 )
 		return -1;
 	pad_len = ( -( sizeof ( cpio ) + sizeof ( trailer_name ) ) & 3 );
-	if ( store ( archive, padding, pad_len ) < 0 )
+	if ( arc_write ( archive, padding, pad_len ) < 0 )
 		return -1;
 	return 0;
 }
@@ -377,6 +529,10 @@ static int store_mapped_path ( struct archive *archive,
 	return store_tree ( archive, real_path, stored_path );
 }
 
+static void usage ( const char *name ) {
+	eprintf ( "Usage: %s [-v|-q] [-o output.bp] dir[=dir] ...\n", name );
+}
+
 /**
  * Parse command-line options
  *
@@ -384,7 +540,7 @@ static int store_mapped_path ( struct archive *archive,
  * @v argv		Arguments
  * @ret optind		First non-option argument, or -1 on error
  */
-int parseopts ( const int argc, char **argv ) {
+static int parseopts ( const int argc, char **argv ) {
 	static const struct option long_options[] = {
 		{ "verbose", 0, NULL, 'v' },
 		{ "quiet", 0, NULL, 'q' },
@@ -392,8 +548,6 @@ int parseopts ( const int argc, char **argv ) {
 		{ "output", required_argument, NULL, 'o' },
 		{ 0, 0, 0, 0 }
 	};
-	static const char usage[] = 
-		"Usage: %s [-v|-q] [-o output.bp] dir[=dir] ...\n";
 	int c;
 
 	while ( 1 ) {
@@ -412,7 +566,7 @@ int parseopts ( const int argc, char **argv ) {
 			verbosity--;
 			break;
 		case 'h':
-			eprintf ( usage, argv[0] );
+			usage ( argv[0] );
 			return -1;
 		case 'o':
 			output_file = optarg;
@@ -430,29 +584,20 @@ int parseopts ( const int argc, char **argv ) {
 
 int main ( int argc, char **argv ) {
 	struct archive archive;
-	static const char padding[] = { 0, 0, 0 };
 	int arg;
-	unsigned int pad_len;
 
 	/* Parse command-line options */
 	arg = parseopts ( argc, argv );
 	if ( arg < 0 )
 		exit ( 1 );
-
-	/* Initialise archive */
-	memset ( &archive, 0, sizeof ( archive ) );
-	if ( output_file ) {
-		archive.name = output_file;
-		archive.file = fopen ( output_file, "w" );
-		if ( ! archive.file ) {
-			eprintf ( "Could not open %s for writing: %s\n",
-				  output_file, strerror ( errno ) );
-			exit ( 1 );
-		}
-	} else {
-		archive.name = "stdout";
-		archive.file = stdout;
+	if ( arg >= argc ) {
+		usage ( argv[0] );
+		exit ( 1 );
 	}
+
+	/* Open archive file */
+	if ( arc_open ( &archive, output_file ) < 0 )
+		exit ( 1 );
 
 	/* Store directory trees */
 	for ( ; arg < argc ; arg++ ) {
@@ -464,16 +609,9 @@ int main ( int argc, char **argv ) {
 	if ( store_trailer ( &archive ) < 0 )
 		exit ( 1 );
 
-	/* Pad file to a multiple of 4 bytes */
-	pad_len = ( -( archive.count ) & 3 );
-	if ( store_raw ( &archive, padding, pad_len ) < 0 )
-		return -1;
-
-	/* Close archive */
-	if ( fclose ( archive.file ) != 0 ) {
-		eprintf ( "Could not close %s: %s\n", archive.name,
-			  strerror ( errno ) );
-	}
+	/* Close archive file */
+	if ( arc_close ( &archive ) < 0 )
+		exit ( 1 );
 
 	return 0;
 }

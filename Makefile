@@ -9,7 +9,7 @@ all : tools bootpacks
 # Build tools for bootfs manipulation
 
 $(BOOTPACK) : $(BOOTPACK).c
-	$(CC) $(CFLAGS) $(EXTRA_CFLAGS) $< -o $@
+	$(CC) $(CFLAGS) $(EXTRA_CFLAGS) -lz $< -o $@
 
 clean ::
 	rm $(BOOTPACK)
