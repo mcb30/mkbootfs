@@ -1,5 +1,6 @@
-PATH := ./tools:$(PATH)
 BOOTPACK = ./tools/bootpack
+
+CFLAGS = -W -Wall -Wextra -O3
 
 BOOTPACKS :=
 
@@ -7,13 +8,13 @@ all : tools bootpacks
 
 # Build tools for bootfs manipulation
 
-tools :
-	$(MAKE) -C tools
+$(BOOTPACK) : $(BOOTPACK).c
+	$(CC) $(CFLAGS) $(EXTRA_CFLAGS) $< -o $@
 
 clean ::
-	$(MAKE) -C tools clean
+	rm $(BOOTPACK)
 
-.PHONY : tools
+tools :: $(BOOTPACK)
 
 # Busybox boot pack
 
@@ -25,7 +26,7 @@ busybox/busybox : busybox/include/autoconf.h
 
 busybox.bp : busybox/busybox $(BOOTPACK)
 	$(MAKE) -C busybox install
-	$(BOOTPACK)k busybox/_install > $@
+	$(BOOTPACK) busybox/_install > $@
 
 BOOTPACKS += busybox.bp
 
