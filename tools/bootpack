@@ -1,0 +1,9 @@
+#!/bin/sh
+
+PACKDIR=$1
+[ -n "$PACKDIR" ] || PACKDIR=.
+
+( cd $PACKDIR && find * | cpio --quiet -o -H newc ) | \
+    squash_cpio_ids | \
+    gzip -9 | \
+    dd bs=4 conv=sync
