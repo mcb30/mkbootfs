@@ -32,11 +32,12 @@ SKEL_DEVS += /dev/mem
 SKEL_DEVS += /dev/urandom
 
 skeleton.bp : $(BOOTPACK)
-	rm -rf skeleton
-	mkdir -p skeleton/{bin,dev,etc,lib/modules,mnt,proc,sbin,sys}
-	mkdir -p skeleton/{usr/{bin,sbin,share}}
-	mkdir -p skeleton/{var/{lock,log,run}}
-	$(BOOTPACK) -o $@ skeleton=/ $(SKEL_DEVS)
+	mkdir -p skeleton
+	rm -rf skeleton/_install
+	mkdir -p skeleton/_install/{bin,dev,etc,lib/modules,mnt,proc,sbin,sys}
+	mkdir -p skeleton/_install/{usr/{bin,sbin,share}}
+	mkdir -p skeleton/_install/{var/{lock,log,run}}
+	$(BOOTPACK) -o $@ skeleton/_install=/ $(SKEL_DEVS)
 
 BOOTPACKS += skeleton.bp
 
@@ -67,8 +68,13 @@ POL_FILES += policy/usr/share/udhcpc/default.script
 POL_FILES += policy/bin/welcome.sh
 
 policy.bp : $(POL_FILES) $(BOOTPACK)
-	$(BOOTPACK) -o $@ \
-		`echo $(POL_FILES) | sed 's/policy\(\S*\)/policy\1=\1/g'`
+	rm -rf policy/_install
+	mkdir -p policy/_install/{etc/init.d,bin,usr/share/udhcpc}
+	for file in $(POL_FILES) ; do \
+		cp -p $$file \
+		  `echo $$file | sed 's/^policy\//policy\/_install\//'` ; \
+	done
+	$(BOOTPACK) -o $@ policy/_install=/
 
 BOOTPACKS += policy.bp
 
