@@ -1,0 +1,53 @@
+#!/bin/sh
+
+HOOKDIR=$1
+
+run_hook () {
+    local HOOK
+    local DEPS
+    local DEP
+
+    HOOK=$1
+    if [ ! -x $HOOKDIR/$HOOK ] ; then
+	echo "No such hook \"$HOOK\"" >&2
+	return 1
+    fi
+    if [ -e /tmp/.hook.$HOOK.run ] ; then
+	# Hook has already been run successfully
+	return 0
+    fi
+    if [ -e /tmp/.hook.$HOOK.running ] ; then
+	echo "Circular dependency on hook \"$HOOK\"" >&2
+	return 1
+    fi
+    touch /tmp/.hook.$HOOK.running
+    DEPS=`egrep -i dependsOn: $HOOKDIR/$HOOK | cut -d: -f2`
+    if [ -n "$DEPS" ] ; then
+	for DEP in $DEPS ; do
+	    if ! run_hook $DEP ; then
+		return 1
+	    fi
+	done
+    fi
+    if ! $HOOKDIR/$HOOK ; then
+	echo "Hook \"$HOOK\" failed to run" >&2
+	return 1
+    fi
+    touch /tmp/.hook.$HOOK.run
+}
+
+if [ ! -d $HOOKDIR ] ; then
+    echo "No such directory \"$HOOKDIR\"" >&2
+    exit 1
+fi
+
+HOOKS=`cd $HOOKDIR ; echo *`
+for HOOK in $HOOKS ; do
+    # Accept only alphanumeric, _ and - in hook names.  This avoids
+    # picking up eeditor temporary files.
+    if echo $HOOK | egrep -q '^[[:alnum:]_-]*$' ; then
+	if ! run_hook $HOOK ; then
+	    exit 1
+	fi
+    fi
+done
