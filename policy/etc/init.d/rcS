@@ -1,0 +1,39 @@
+#!/bin/sh
+
+netdevs () {
+    egrep '^[[:space:]]*[[:alnum:]]*:' /proc/net/dev | cut -d: -f1
+}
+
+modules () {
+    find /lib/modules -type f
+}
+
+/bin/mount -t proc none /proc
+/bin/mount -t sysfs none /sys
+/usr/sbin/setlogcons 5
+/sbin/mdev -s
+/sbin/ifconfig lo up 127.0.0.1
+
+# Unzip any gzipped modules
+for module in `modules` ; do
+    if [ "${module%%.gz}" != "${module}" ]; then
+	gunzip $module
+    fi
+done
+
+# Load any modules
+for dummy in `modules` ; do
+    for module in `modules` ; do
+	name=`basename "${module%%.ko}"`
+	if ! lsmod | egrep "^$name[[:space:]]" > /dev/null ; then
+	    insmod $module
+	fi
+    done
+done
+
+# Bring up any non-loopback net devices using udhcpc
+for netdev in `netdevs`; do
+    if [ "${netdev}" != "lo" ]; then
+	udhcpc $netdev
+    fi
+done
