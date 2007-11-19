@@ -32,7 +32,6 @@ SKEL_DEVS += /dev/mem
 SKEL_DEVS += /dev/urandom
 
 skeleton.bp : $(BOOTPACK)
-	mkdir -p skeleton
 	rm -rf skeleton/_install
 	mkdir -p skeleton/_install/{bin,dev,etc,lib/modules,mnt,proc,sbin,sys}
 	mkdir -p skeleton/_install/{usr/{bin,sbin,share}}
@@ -40,6 +39,9 @@ skeleton.bp : $(BOOTPACK)
 	$(BOOTPACK) -o $@ skeleton/_install=/ $(SKEL_DEVS)
 
 BOOTPACKS += skeleton.bp
+
+clean ::
+	rm -rf skeleton/_install
 
 # Busybox boot pack
 
@@ -91,6 +93,9 @@ policy.bp : $(POL_FILES) $(BOOTPACK)
 	$(BOOTPACK) -o $@ policy/_install=/
 
 BOOTPACKS += policy.bp
+
+clean ::
+	rm -rf policy/_install
 
 # Boot pack common instructions
 
