@@ -56,6 +56,20 @@ BOOTPACKS += busybox.bp
 clean ::
 	$(MAKE) -C busybox clean
 
+# open-iscsi boot pack
+
+open-iscsi/usr/iscsistart :
+	$(MAKE) -C open-iscsi/utils/fwparam_ibft
+	$(MAKE) -C open-iscsi/usr
+
+iscsi.bp : open-iscsi/usr/iscsistart
+	$(BOOTPACK) -o $@ $<=/sbin/iscsistart
+
+BOOTPACKS += iscsi.bp
+
+clean ::
+	$(MAKE) -C open-iscsi clean
+
 # Policy boot pack
 
 POL_FILES :=
