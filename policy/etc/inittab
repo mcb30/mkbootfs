@@ -4,6 +4,7 @@
 ::restart:/sbin/init
 
 tty1::respawn:-/bin/welcome.sh
+ttyS0::respawn:-/bin/welcome.sh
 tty2::askfirst:-/bin/sh
 tty3::askfirst:-/bin/sh
 tty4::askfirst:-/bin/sh
