@@ -31,9 +31,28 @@ for dummy in `modules` ; do
     done
 done
 
-# Bring up any non-loopback net devices using udhcpc
+# Apply any static net device configuration from /proc/cmdline
+for arg in `cat /proc/cmdline`; do
+    if [ "${arg##ip=}" != "${arg}" ]; then
+	netdev=`echo "${arg##ip=}" | cut -d: -f6`
+	ip=`echo "${arg##ip=}" | cut -d: -f1` \
+	    router=`echo "${arg##ip=}" | cut -d: -f3` \
+	    subnet=`echo "${arg##ip=}" | cut -d: -f4` \
+	    hostname=`echo "${arg##ip=}" | cut -d: -f5` \
+	    interface=${netdev} \
+	    /usr/share/udhcpc/default.script bound
+	while ! ifconfig $netdev | grep RUNNING > /dev/null ; do
+	    echo "Waiting for link-up on ${netdev}..."
+	    sleep 1
+	done
+    fi
+done
+
+# Bring up any remaining non-loopback net devices using udhcpc
 for netdev in `netdevs`; do
     if [ "${netdev}" != "lo" ]; then
-	udhcpc $netdev
+	if ! ifconfig $netdev | grep 'inet addr' > /dev/null ; then
+	    udhcpc $netdev
+	fi
     fi
 done
