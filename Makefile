@@ -82,6 +82,7 @@ POL_FILES += policy/etc/inittab
 POL_FILES += policy/etc/init.d/rcS
 POL_FILES += policy/usr/share/udhcpc/default.script
 POL_FILES += policy/bin/welcome.sh
+POL_FILES += policy/bin/run-hooks
 
 policy.bp : $(POL_FILES) $(BOOTPACK)
 	rm -rf policy/_install
