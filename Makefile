@@ -36,6 +36,7 @@ skeleton.bp : $(BOOTPACK)
 	mkdir -p skeleton/_install/{bin,dev,etc,lib/modules,mnt,proc,sbin,sys}
 	mkdir -p skeleton/_install/{usr/{bin,sbin,share}}
 	mkdir -p skeleton/_install/{var/{lock,log,run}}
+	ln -s sbin/init skeleton/_install/init
 	$(BOOTPACK) -o $@ skeleton/_install=/ $(SKEL_DEVS)
 
 BOOTPACKS += skeleton.bp
@@ -47,10 +48,10 @@ clean ::
 
 busybox/busybox : busybox/.config
 	$(MAKE) -C busybox oldconfig
-	uclibc $(MAKE) -C busybox
+	$(MAKE) -C busybox CC=uclibc-gcc
 
 busybox.bp : busybox/busybox $(BOOTPACK)
-	$(MAKE) -C busybox install
+	$(MAKE) -C busybox install CC=uclibc-gcc
 	$(BOOTPACK) -o $@ busybox/_install=/
 
 BOOTPACKS += busybox.bp
@@ -67,7 +68,8 @@ open-iscsi/usr/iscsistart :
 iscsi.bp : open-iscsi/usr/iscsistart
 	$(BOOTPACK) -o $@ $<=/sbin/iscsistart
 
-BOOTPACKS += iscsi.bp
+# Temporarily disabled
+# BOOTPACKS += iscsi.bp
 
 clean ::
 	$(MAKE) -C open-iscsi clean
