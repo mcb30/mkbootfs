@@ -46,8 +46,11 @@ clean ::
 
 # Busybox boot pack
 
-busybox/busybox : busybox/.config
+busybox/.config : busybox-config
+	cp -f $< $@
 	$(MAKE) -C busybox oldconfig
+
+busybox/busybox : busybox/.config
 	$(MAKE) -C busybox CC=uclibc-gcc
 
 busybox.bp : busybox/busybox $(BOOTPACK)
@@ -58,6 +61,7 @@ BOOTPACKS += busybox.bp
 
 clean ::
 	$(MAKE) -C busybox clean
+	rm -f busybox/.config
 
 # open-iscsi boot pack
 
