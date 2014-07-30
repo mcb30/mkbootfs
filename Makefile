@@ -34,8 +34,8 @@ SKEL_DEVS += /dev/urandom
 skeleton.bp : $(BOOTPACK)
 	rm -rf skeleton/_install
 	mkdir -p skeleton/_install/{bin,dev,etc,lib/modules,mnt,proc,sbin,sys}
-	mkdir -p skeleton/_install/{usr/{bin,sbin,share}}
-	mkdir -p skeleton/_install/{var/{lock,log,run}}
+	mkdir -p skeleton/_install/usr/{bin,sbin,share}
+	mkdir -p skeleton/_install/var/{lock,log,run}
 	ln -s sbin/init skeleton/_install/init
 	$(BOOTPACK) -o $@ skeleton/_install=/ $(SKEL_DEVS)
 
