@@ -231,9 +231,8 @@ static int arc_open ( struct archive *archive, const char *filename ) {
  * @ret success		0 on success, -1 on error
  */
 static int arc_close ( struct archive *archive ) {
-	static const char padding[] = { 0, 0, 0 };
 	struct gzfooter gzfooter;
-	unsigned int pad_len;
+	unsigned int padded_len;
 	size_t out_len;
 	int zerr;
 	int done;
@@ -264,10 +263,20 @@ static int arc_close ( struct archive *archive ) {
 	if ( arc_write_raw ( archive, &gzfooter, sizeof ( gzfooter ) ) < 0 )
 		return -1;
 
-	/* Pad underlying file to a multiple of 4 bytes */
-	pad_len = ( -( archive->count ) & 3 );
-	if ( arc_write_raw ( archive, padding, pad_len ) < 0 )
+	/* Flush any unwritten data before truncating */
+	if ( fflush ( archive->file ) != 0 ) {
+		eprintf ( "Could not flush %s: %s\n", archive->name,
+			  strerror ( errno ) );
 		return -1;
+	}
+
+	/* Pad underlying file to a multiple of 4 bytes */
+	padded_len = ( ( archive->count + 0xfff ) & ~0xfff );
+	if ( ftruncate ( fileno ( archive->file ), padded_len ) != 0 ) {
+		eprintf ( "Could not pad %s: %s\n", archive->name,
+			  strerror ( errno ) );
+		return -1;
+	}
 
 	/* Close archive */
 	if ( fclose ( archive->file ) != 0 ) {
