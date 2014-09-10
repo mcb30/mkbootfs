@@ -3,4 +3,4 @@
 	url = git://git.busybox.net/busybox
 [submodule "open-iscsi"]
 	path = open-iscsi
-	url = git://git.kernel.org/pub/scm/linux/kernel/git/mnc/open-iscsi.git
+	url = git://github.com/mikechristie/open-iscsi.git
